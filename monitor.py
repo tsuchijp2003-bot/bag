@@ -123,7 +123,8 @@ def _from_ld(products, data, src, matches):
         "id":           data.get("sku") or item_id(name, src),
         "name":         name,
         "price":        str(offer.get("price", "")),
-        "url":          data.get("url") or offer.get("url") or src,
+        "url":          next((u for u in [data.get("url"), offer.get("url"), src]
+                         if u and u.startswith("http") and "schema.org" not in u), src),
         "availability": offer.get("availability", "unknown"),
     })
 
