@@ -112,6 +112,38 @@ async def scrape(page: Page, url: str, keywords: list[str]) -> list[dict]:
     return products
 
 
+
+async def is_purchasable(page: Page, url: str) -> bool:
+    """商品ページにカートボタンがあるか確認する"""
+    try:
+        await asyncio.sleep(random.uniform(1.5, 3.0))
+        await page.goto(url, timeout=30_000, wait_until="domcontentloaded")
+        await page.wait_for_timeout(3000)
+
+        # カートボタンのセレクタ候補
+        selectors = [
+            "[class*='AddToCart']:not([disabled])",
+            "[class*='add-to-cart']:not([disabled])",
+            "button[data-action*='cart']:not([disabled])",
+            "button[class*='cart']:not([disabled])",
+        ]
+        for sel in selectors:
+            el = await page.query_selector(sel)
+            if el and await el.is_visible():
+                return True
+
+        # テキストでも探す
+        for btn in await page.query_selector_all("button:not([disabled])"):
+            text = (await btn.inner_text()).strip().lower()
+            if any(kw in text for kw in ["カートに追加", "add to cart", "購入", "buy"]):
+                return True
+
+        return False
+    except Exception as e:
+        log.warning(f"カートチェック失敗: {e}")
+        return False  # 確認できなければ通知しない
+
+
 def _from_ld(products, data, src, matches):
     name = data.get("name", "")
     if not name or not matches(name):
@@ -162,6 +194,10 @@ async def check_all(page: Page, targets: list[dict]):
         for item in items:
             h = content_hash(item)
             iid = item["id"]
+            purchasable = await is_purchasable(page, item["url"])
+            if not purchasable:
+                log.info(f"  ⛔ カートボタンなし: {item['name']} — スキップ")
+                continue
             if iid not in seen:
                 log.info(f"  🆕 NEW: {item['name']} ({item['availability']})")
                 notify(item, "new")
