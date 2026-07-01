@@ -12,8 +12,6 @@ bag-monitor
 """
 
 import asyncio
-import hashlib
-import json
 import logging
 import os
 import random
@@ -30,7 +28,7 @@ TEST_MODE         = "--test" in sys.argv
 
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
+    format="%(asctime)s %(message)s",
     handlers=[logging.StreamHandler()] + (
         [] if TEST_MODE else [logging.FileHandler("monitor.log")]
     ),
@@ -43,22 +41,21 @@ def load_config() -> dict:
         return yaml.safe_load(f)
 
 
-seen: dict[str, bool] = {}  # url → 前回カート購入可能だったか
+seen: dict[str, bool] = {}
+cycle = 0
 
 
 async def is_purchasable(page: Page, url: str) -> bool:
-    """個別ページにアクセスしてカートボタンがあるか確認"""
     try:
         await page.goto(url, timeout=30_000, wait_until="domcontentloaded")
         await page.wait_for_timeout(3000)
 
-        selectors = [
+        for sel in [
             "[class*='AddToCart']:not([disabled])",
             "[class*='add-to-cart']:not([disabled])",
             "button[data-action*='cart']:not([disabled])",
             "button[class*='cart']:not([disabled])",
-        ]
-        for sel in selectors:
+        ]:
             el = await page.query_selector(sel)
             if el and await el.is_visible():
                 return True
@@ -70,13 +67,13 @@ async def is_purchasable(page: Page, url: str) -> bool:
 
         return False
     except Exception as e:
-        log.warning(f"  アクセス失敗: {url} — {e}")
+        log.warning(f"    ⚠️  アクセス失敗: {e}")
         return False
 
 
 def notify(target: dict, url: str):
     if TEST_MODE or not SLACK_WEBHOOK_URL:
-        log.info(f"  [TEST] 通知スキップ: {target['name']}")
+        log.info(f"    [TEST] Slack通知スキップ")
         return
     payload = {
         "text": f"🛒 *在庫アラート* — {target['name']}",
@@ -90,28 +87,41 @@ def notify(target: dict, url: str):
     }
     try:
         requests.post(SLACK_WEBHOOK_URL, json=payload, timeout=10).raise_for_status()
-        log.info(f"  📨 Slack送信: {target['name']}")
+        log.info(f"    📨 Slack送信済み")
     except Exception as e:
-        log.error(f"  Slack失敗: {e}")
+        log.error(f"    ❌ Slack失敗: {e}")
 
 
 async def check_all(page: Page, targets: list[dict]):
-    log.info("─── チェック開始 ──────────────────────────")
-    for target in targets:
+    global cycle
+    cycle += 1
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    log.info(f"")
+    log.info(f"┌─ サイクル #{cycle}  {now}  ({len(targets)} 件チェック)")
+
+    for i, target in enumerate(targets, 1):
         url = target["url"]
-        purchasable = await is_purchasable(page, url)
-        was_purchasable = seen.get(url, False)
+        log.info(f"│  [{i:02d}/{len(targets)}] {target['name']}")
+        log.info(f"│       URL: {url}")
+
+        purchasable     = await is_purchasable(page, url)
+        was_purchasable = seen.get(url, None)
+        status          = "✅ カート可" if purchasable else "❌ 在庫なし"
+        log.info(f"│       結果: {status}")
 
         if purchasable and not was_purchasable:
-            log.info(f"  🆕 カート可能: {target['name']}")
+            log.info(f"│       🆕 → Slack通知!")
             notify(target, url)
-        elif not purchasable and was_purchasable:
-            log.info(f"  ⛔ 在庫切れ: {target['name']}")
-        else:
-            log.debug(f"  ✓ 変化なし: {target['name']} ({'購入可' if purchasable else '在庫なし'})")
+        elif was_purchasable is not None and not purchasable and was_purchasable:
+            log.info(f"│       📭 在庫切れに変化")
 
         seen[url] = purchasable
-        await asyncio.sleep(random.uniform(3.0, 6.0))
+
+        wait = random.uniform(3.0, 6.0)
+        log.info(f"│       次まで {wait:.1f}秒待機...")
+        await asyncio.sleep(wait)
+
+    log.info(f"└─ サイクル #{cycle} 完了")
 
 
 async def main():
@@ -119,10 +129,12 @@ async def main():
     targets  = cfg["targets"]
     interval = cfg.get("interval", 60)
 
-    log.info("=" * 50)
-    log.info(f"bag-monitor {'[テストモード]' if TEST_MODE else '起動'}")
-    log.info(f"  ターゲット: {len(targets)} 件  間隔: {interval}秒")
-    log.info("=" * 50)
+    log.info("=" * 55)
+    log.info(f"  bag-monitor {'[テストモード]' if TEST_MODE else '起動'}")
+    log.info(f"  ターゲット : {len(targets)} 件")
+    log.info(f"  チェック間隔: {interval} 秒")
+    log.info(f"  Slack      : {'設定済み ✓' if SLACK_WEBHOOK_URL else '未設定 ⚠️'}")
+    log.info("=" * 55)
 
     async with async_playwright() as pw:
         browser = await pw.chromium.launch(
@@ -143,9 +155,10 @@ async def main():
         )
 
         page = await ctx.new_page()
-        # トップページでCookie取得
+        log.info("トップページにアクセス中...")
         await page.goto("https://www.hermes.com/jp/ja/", timeout=30_000)
         await page.wait_for_timeout(3000)
+        log.info("準備完了。モニタリング開始。")
 
         if TEST_MODE:
             await check_all(page, targets)
@@ -155,11 +168,12 @@ async def main():
                 try:
                     await check_all(page, targets)
                 except Exception as e:
-                    log.error(f"エラー: {e}", exc_info=True)
+                    log.error(f"❌ エラー: {e}", exc_info=True)
                     try:
                         page = await ctx.new_page()
                     except Exception:
                         pass
+                log.info(f"次のサイクルまで {interval} 秒待機...")
                 await asyncio.sleep(interval)
 
         await browser.close()
