@@ -75,15 +75,9 @@ def notify(target: dict, url: str):
     if TEST_MODE or not SLACK_WEBHOOK_URL:
         log.info(f"    [TEST] Slack通知スキップ")
         return
+    now = datetime.now().strftime("%Y-%m-%d %H:%M")
     payload = {
-        "text": f"🛒 *在庫アラート* — {target['name']}",
-        "attachments": [{
-            "color": "#E8A430",
-            "fields": [
-                {"title": "検出時刻", "value": datetime.now().strftime("%Y-%m-%d %H:%M"), "short": True},
-            ],
-            "actions": [{"type": "button", "text": "今すぐ開く", "url": url, "style": "primary"}],
-        }],
+        "text": f"🛒 *在庫アラート* — {target['name']}\n🕐 {now}\n🔗 {url}",
     }
     try:
         requests.post(SLACK_WEBHOOK_URL, json=payload, timeout=10).raise_for_status()
