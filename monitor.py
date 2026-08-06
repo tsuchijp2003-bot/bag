@@ -65,6 +65,9 @@ async def is_purchasable(page: Page, url: str) -> bool:
             if any(kw in text for kw in ["カートに追加", "add to cart", "購入", "buy"]):
                 return True
 
+        # デバッグ用：ページHTMLの先頭1000文字をログ出力
+        html = await page.content()
+        log.info(f"    📄 HTML先頭: {html[:1000]}")
         return False
     except Exception as e:
         log.warning(f"    ⚠️  アクセス失敗: {e}")
