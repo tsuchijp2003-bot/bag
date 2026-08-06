@@ -1,15 +1,12 @@
 name: bag-monitor
 
 on:
-  schedule:
-    # 6時間ごとに再起動（Actionsの上限が6時間のため）
-    - cron: "0 */6 * * *"
   workflow_dispatch:
 
 jobs:
   run:
     runs-on: ubuntu-latest
-    timeout-minutes: 355  # 5時間55分で終了 → 次のcronで再起動
+    timeout-minutes: 355  # 5時間55分で終了
 
     steps:
       - uses: actions/checkout@v4
@@ -29,9 +26,15 @@ jobs:
         env:
           TARGETS_YAML: ${{ secrets.TARGETS_YAML }}
         run: echo "$TARGETS_YAML" > targets.yml
-        # targets.yml はディスク上にのみ存在し、リポジトリには含まれない
 
       - name: モニター起動（ループ）
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
         run: python monitor.py
+
+      - name: 次のジョブをトリガー
+        if: always()  # タイムアウトで終了しても必ず実行
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh workflow run run.yml --ref main
